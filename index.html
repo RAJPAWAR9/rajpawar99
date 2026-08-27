@@ -1,1 +1,94 @@
 
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Booster OS — Music Player</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#08090d;color:#fff;font-family:Inter,system-ui,Arial,sans-serif;min-height:100vh}
+.app{max-width:1100px;margin:auto;padding:28px}
+h1{font-size:34px;margin:0 0 6px}.sub{color:#8f94a3;margin-bottom:24px}
+.search{display:flex;gap:10px}.search input{flex:1;padding:16px 18px;border:1px solid #292d38;background:#11131a;color:#fff;border-radius:16px;font-size:16px;outline:none}.search button,.play{border:0;border-radius:14px;padding:0 20px;background:#fff;color:#000;font-weight:700;cursor:pointer}
+.grid{display:grid;grid-template-columns:1.3fr .7fr;gap:22px;margin-top:22px}
+.panel{background:linear-gradient(145deg,#151720,#0e1016);border:1px solid #252936;border-radius:24px;padding:20px;box-shadow:0 20px 60px #0007}
+.results{display:grid;gap:10px;max-height:560px;overflow:auto}.item{display:flex;gap:14px;padding:12px;border-radius:16px;cursor:pointer}.item:hover{background:#ffffff0b}.item img{width:112px;height:63px;object-fit:cover;border-radius:10px}.meta{min-width:0}.title{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.channel{color:#9095a4;font-size:13px;margin-top:5px}
+.player{position:sticky;top:20px}.art{width:100%;aspect-ratio:16/9;border-radius:18px;overflow:hidden;background:#05060a}.art iframe{width:100%;height:100%;border:0}.now{margin-top:15px}.now h2{font-size:20px;margin:0 0 5px}.now p{color:#9297a5;margin:0}.hint{color:#7e8492;font-size:12px;line-height:1.5;margin-top:14px}
+.empty{padding:40px;text-align:center;color:#777d8a}
+@media(max-width:800px){.app{padding:16px}.grid{grid-template-columns:1fr}.player{position:relative;top:auto}.search button{padding:0 15px}.item img{width:96px;height:54px}}
+</style>
+</head>
+<body>
+<div class="app">
+<h1>Booster OS</h1>
+<div class="sub">Fast YouTube-powered music search & player</div>
+
+<div class="search">
+<input id="q" placeholder="Search song, artist or album..." autocomplete="off">
+<button id="searchBtn">Search</button>
+</div>
+
+<div class="grid">
+<section class="panel">
+<h3>Search results</h3>
+<div id="results" class="results"><div class="empty">Search for a song to start.</div></div>
+</section>
+
+<section class="panel player">
+<div class="art"><iframe id="yt" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe></div>
+<div class="now"><h2 id="nowTitle">Nothing playing</h2><p id="nowChannel">Choose a result</p></div>
+<div class="hint">Playback uses YouTube's official embedded player. The Data API is used only to find videos.</div>
+</section>
+</div>
+</div>
+
+<script>
+const YOUTUBE_API_KEY = "AIzaSyB4cI2iVQbSEMi-hK-ZGveQv9NvDvodSpk";
+const API = "https://www.googleapis.com/youtube/v3/search";
+
+const q = document.getElementById("q");
+const results = document.getElementById("results");
+const yt = document.getElementById("yt");
+const nowTitle = document.getElementById("nowTitle");
+const nowChannel = document.getElementById("nowChannel");
+
+async function searchYouTube(){
+  const term=q.value.trim();
+  if(!term) return;
+  results.innerHTML='<div class="empty">Searching…</div>';
+  try{
+    const url = API+"?part=snippet&type=video&videoEmbeddable=true&videoSyndicated=true&maxResults=15&regionCode=IN&q="+encodeURIComponent(term)+"&key="+encodeURIComponent(YOUTUBE_API_KEY);
+    const res=await fetch(url);
+    const data=await res.json();
+    if(!res.ok) throw new Error(data?.error?.message || "YouTube API error");
+    const items=(data.items||[]).filter(x=>x.id?.videoId);
+    if(!items.length){results.innerHTML='<div class="empty">No playable results found.</div>';return;}
+    results.innerHTML="";
+    items.forEach(item=>{
+      const s=item.snippet, id=item.id.videoId;
+      const el=document.createElement("div");
+      el.className="item";
+      el.innerHTML=`
+        <img src="${s.thumbnails?.medium?.url||s.thumbnails?.default?.url}" alt="">
+        <div class="meta"><div class="title">${escapeHtml(s.title)}</div><div class="channel">${escapeHtml(s.channelTitle||"YouTube")}</div></div>`;
+      el.onclick=()=>play(id,s.title,s.channelTitle||"YouTube");
+      results.appendChild(el);
+    });
+  }catch(e){
+    results.innerHTML='<div class="empty">Error: '+escapeHtml(e.message)+'</div>';
+  }
+}
+
+function play(id,title,channel){
+  yt.src="https://www.youtube.com/embed/"+encodeURIComponent(id)+"?autoplay=1&rel=0&playsinline=1";
+  nowTitle.textContent=strip(title);
+  nowChannel.textContent=channel;
+}
+function strip(x){const d=document.createElement("div");d.innerHTML=x;return d.textContent||d.innerText||x}
+function escapeHtml(x){return String(x).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]))}
+
+document.getElementById("searchBtn").onclick=searchYouTube;
+q.addEventListener("keydown",e=>{if(e.key==="Enter")searchYouTube()});
+</script>
+</body>
+</html>
