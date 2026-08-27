@@ -501,7 +501,9 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;heigh
 .lyric-word.word-next{opacity:.42;filter:blur(.18px)}
 .lyric-line.word-glow-off .lyric-word{opacity:1!important;transform:none!important;filter:none!important;text-shadow:none!important;transition:none!important}
 @media(prefers-reduced-motion:reduce){.lyric-word{transition:none!important}}
-</style></head>
+</style>
+<script src="https://www.youtube.com/iframe_api"></script>
+</head>
 <body data-theme="dark">
 
 <!-- AMBIENT DYNAMIC BACKGROUND -->
@@ -3791,6 +3793,168 @@ body.booster-video-motion.playing-anim .fp-art-wrap{
     raf=requestAnimationFrame(ambientPulse);
   }
   raf=requestAnimationFrame(ambientPulse);
+})();
+</script>
+
+
+<script>
+/* ============================================================
+   BOOSTER OS — YOUTUBE PLAYER BRIDGE
+   Uses YouTube IFrame Player API for playback.
+   The Data API is used only for search; playback is handled by
+   the official YouTube IFrame player.
+   ============================================================ */
+(function () {
+  "use strict";
+
+  const YT_API_KEY = "AIzaSyB4cI2iVQbSEMi-hK-ZGveQv9NvDvodSpk";
+  const YT_SEARCH = "https://www.googleapis.com/youtube/v3/search";
+  let ytPlayer = null;
+  let ytReady = false;
+  let pendingVideo = null;
+
+  function ensureHost() {
+    let host = document.getElementById("yt-player-host");
+    if (!host) {
+      host = document.createElement("div");
+      host.id = "yt-player-host";
+      host.style.cssText =
+        "position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;" +
+        "opacity:0;pointer-events:none;";
+      document.body.appendChild(host);
+    }
+    return host;
+  }
+
+  window.onYouTubeIframeAPIReady = function () {
+    ytReady = true;
+    createPlayer();
+    if (pendingVideo) {
+      const id = pendingVideo;
+      pendingVideo = null;
+      loadYouTubeVideo(id);
+    }
+  };
+
+  function createPlayer() {
+    if (ytPlayer || !window.YT || !YT.Player) return;
+    ensureHost();
+    ytPlayer = new YT.Player("yt-player-host", {
+      width: "1",
+      height: "1",
+      videoId: "",
+      playerVars: {
+        autoplay: 0,
+        controls: 0,
+        disablekb: 1,
+        playsinline: 1,
+        rel: 0,
+        modestbranding: 1
+      },
+      events: {
+        onReady: function () {
+          window.dispatchEvent(new CustomEvent("booster:youtube-ready"));
+        },
+        onStateChange: function (e) {
+          window.dispatchEvent(new CustomEvent("booster:youtube-state", {
+            detail: { state: e.data }
+          }));
+        },
+        onError: function (e) {
+          window.dispatchEvent(new CustomEvent("booster:youtube-error", {
+            detail: { code: e.data }
+          }));
+        }
+      }
+    });
+  }
+
+  async function youtubeSearch(query, maxResults) {
+    const q = String(query || "").trim();
+    if (!q) return [];
+    const url = YT_SEARCH + "?part=snippet&type=video&videoEmbeddable=true" +
+      "&maxResults=" + Math.min(25, maxResults || 15) +
+      "&q=" + encodeURIComponent(q) +
+      "&key=" + encodeURIComponent(YT_API_KEY);
+
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("YouTube search failed: HTTP " + res.status);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message || "YouTube API error");
+
+    return (data.items || []).map(function (item) {
+      return {
+        id: item.id && item.id.videoId,
+        name: item.snippet ? item.snippet.title : "YouTube video",
+        title: item.snippet ? item.snippet.title : "YouTube video",
+        artistName: item.snippet ? item.snippet.channelTitle : "YouTube",
+        albumName: "YouTube",
+        image: item.snippet && item.snippet.thumbnails &&
+          ((item.snippet.thumbnails.high || item.snippet.thumbnails.medium ||
+            item.snippet.thumbnails.default || {}).url),
+        thumbnail: item.snippet && item.snippet.thumbnails &&
+          ((item.snippet.thumbnails.high || item.snippet.thumbnails.medium ||
+            item.snippet.thumbnails.default || {}).url),
+        youtubeId: item.id && item.id.videoId,
+        source: "youtube"
+      };
+    }).filter(function (x) { return !!x.youtubeId; });
+  }
+
+  function loadYouTubeVideo(videoId, autoplay) {
+    if (!videoId) return;
+    if (!ytReady || !ytPlayer) {
+      pendingVideo = videoId;
+      return;
+    }
+    ytPlayer.loadVideoById(videoId);
+    if (autoplay !== false) ytPlayer.playVideo();
+  }
+
+  window.BoosterYouTube = {
+    search: youtubeSearch,
+    load: loadYouTubeVideo,
+    play: function () { if (ytPlayer) ytPlayer.playVideo(); },
+    pause: function () { if (ytPlayer) ytPlayer.pauseVideo(); },
+    stop: function () { if (ytPlayer) ytPlayer.stopVideo(); },
+    seek: function (seconds) { if (ytPlayer) ytPlayer.seekTo(seconds, true); },
+    getCurrentTime: function () { return ytPlayer ? ytPlayer.getCurrentTime() : 0; },
+    getDuration: function () { return ytPlayer ? ytPlayer.getDuration() : 0; },
+    getState: function () { return ytPlayer ? ytPlayer.getPlayerState() : -1; },
+    setVolume: function (v) { if (ytPlayer) ytPlayer.setVolume(Math.max(0, Math.min(100, v))); }
+  };
+
+  // Generic hooks for existing app code.
+  window.addEventListener("booster:youtube-load", function (e) {
+    const d = e.detail || {};
+    loadYouTubeVideo(d.videoId, d.autoplay !== false);
+  });
+
+  window.addEventListener("booster:youtube-play", function () {
+    if (ytPlayer) ytPlayer.playVideo();
+  });
+
+  window.addEventListener("booster:youtube-pause", function () {
+    if (ytPlayer) ytPlayer.pauseVideo();
+  });
+
+  window.addEventListener("booster:youtube-seek", function (e) {
+    const t = e.detail && Number(e.detail.seconds);
+    if (ytPlayer && Number.isFinite(t)) ytPlayer.seekTo(t, true);
+  });
+})();
+</script>
+
+
+<script>
+(function(){
+  "use strict";
+  window.BoosterOSYouTubeSearch = async function(query){
+    if (!window.BoosterYouTube) throw new Error("YouTube player is still loading.");
+    const results = await window.BoosterYouTube.search(query, 20);
+    window.dispatchEvent(new CustomEvent("booster:youtube-results", {detail:{results:results}}));
+    return results;
+  };
 })();
 </script>
 
