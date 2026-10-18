@@ -1013,41 +1013,47 @@ const Piped=(function(){
   const LIST_URL="https://raw.githubusercontent.com/TeamPiped/documentation/main/content/docs/public-instances/index.md";
   const JSON_URL="https://piped-instances.kavin.rocks/";
   const FALLBACK=["https://pipedapi.kavin.rocks","https://pipedapi.leptons.xyz","https://pipedapi.nosebs.ru","https://pipedapi.adminforge.de","https://api.piped.private.coffee","https://pipedapi.drgns.space","https://pipedapi.owo.si","https://pipedapi.ducks.party","https://api.piped.yt","https://pipedapi.reallyaweso.me","https://pipedapi.darkness.services","https://pipedapi.orangenet.cc"];
-  const LIST_TTL=1*3600e3, URL_TTL=4*3600e3, MAX_TRIES=24, STAGGER=700, TIMEOUT=5500;
+  const LIST_TTL=1*3600e3, URL_TTL=4*3600e3, MAX_TRIES=24, STAGGER=300, TIMEOUT=4500;
   let list=null, loading=null;
   function abortErr(){ const e=new Error("aborted"); e.type="aborted"; e.name="AbortError"; return e; }
+  function tf(u,ms){ const c=new AbortController(), t=setTimeout(function(){ try{c.abort();}catch(e){} },ms); return fetch(u,{signal:c.signal}).finally(function(){ clearTimeout(t); }); }
+  async function fetchList(){
+    let out=[];
+    try{
+      const jr=await tf(JSON_URL,3000);
+      if(jr.ok){
+        const arr=await jr.json();
+        if(Array.isArray(arr)) out=arr
+          .filter(function(x){ return x&&/^https?:\/\//.test(x.api_url||""); })
+          .sort(function(a,b){ return (Number(b.uptime_24h)||0)-(Number(a.uptime_24h)||0)||(Number(b.uptime_30d)||0)-(Number(a.uptime_30d)||0); })
+          .map(function(x){ return String(x.api_url).replace(/\/+$/,""); });
+      }
+    }catch(e){}
+    if(!out.length) try{
+      const r=await tf(LIST_URL,3000);
+      if(r.ok){
+        const body=await r.text();
+        out=body.split("\n")
+          .filter(function(l){ return l.trim().startsWith("|")&&l.indexOf("http")>=0; })
+          .map(function(l){ return l.split("|").slice(1,-1).map(function(x){ return x.trim(); }); })
+          .filter(function(c){ return c.length>=4&&/^https?:\/\//.test(c[1]); })
+          .map(function(c){ return { api:c[1].replace(/\/+$/,""), cdn:c[3].toLowerCase()==="yes" }; })
+          .sort(function(a,b){ return (b.cdn?1:0)-(a.cdn?1:0); })
+          .map(function(r){ return r.api; });
+      }
+    }catch(e){}
+    FALLBACK.forEach(function(u){ if(out.indexOf(u)<0) out.push(u); });
+    try{ localStorage.setItem("piped_instances",JSON.stringify({t:Date.now(),list:out})); }catch(e){}
+    return out;
+  }
+  /* never block a search on the instance-list download: use the cached list at once (refresh it in the background when old), else wait max 1.8s then use the built-in list */
   function load(){
     if(list) return Promise.resolve(list);
     if(loading) return loading;
     loading=(async function(){
-      try{ const c=JSON.parse(localStorage.getItem("piped_instances")||"null"); if(c&&Array.isArray(c.list)&&c.list.length&&Date.now()-c.t<LIST_TTL){ list=c.list; return list; } }catch(e){}
-      let out=[];
-      try{
-        const jr=await fetch(JSON_URL);
-        if(jr.ok){
-          const arr=await jr.json();
-          if(Array.isArray(arr)) out=arr
-            .filter(function(x){ return x&&/^https?:\/\//.test(x.api_url||""); })
-            .sort(function(a,b){ return (Number(b.uptime_24h)||0)-(Number(a.uptime_24h)||0)||(Number(b.uptime_30d)||0)-(Number(a.uptime_30d)||0); })
-            .map(function(x){ return String(x.api_url).replace(/\/+$/,""); });
-        }
-      }catch(e){}
-      if(!out.length) try{
-        const r=await fetch(LIST_URL);
-        if(r.ok){
-          const body=await r.text();
-          out=body.split("\n")
-            .filter(function(l){ return l.trim().startsWith("|")&&l.indexOf("http")>=0; })
-            .map(function(l){ return l.split("|").slice(1,-1).map(function(x){ return x.trim(); }); })
-            .filter(function(c){ return c.length>=4&&/^https?:\/\//.test(c[1]); })
-            .map(function(c){ return { api:c[1].replace(/\/+$/,""), cdn:c[3].toLowerCase()==="yes" }; })
-            .sort(function(a,b){ return (b.cdn?1:0)-(a.cdn?1:0); })
-            .map(function(r){ return r.api; });
-        }
-      }catch(e){}
-      FALLBACK.forEach(function(u){ if(out.indexOf(u)<0) out.push(u); });
-      list=out;
-      try{ localStorage.setItem("piped_instances",JSON.stringify({t:Date.now(),list:list})); }catch(e){}
+      try{ const c=JSON.parse(localStorage.getItem("piped_instances")||"null");
+        if(c&&Array.isArray(c.list)&&c.list.length){ list=c.list; if(Date.now()-c.t>=LIST_TTL) fetchList().catch(function(){}); return list; } }catch(e){}
+      list=await Promise.race([fetchList(),new Promise(function(r){ setTimeout(function(){ r(FALLBACK.slice()); },1800); })]);
       return list;
     })();
     return loading;
@@ -1083,7 +1089,7 @@ const Piped=(function(){
                     launch(); });
           clearTimeout(nextT); nextT=setTimeout(launch,STAGGER);
         }
-        launch();
+        launch();launch();launch();   /* 3 instances at once, then one more every STAGGER ms */
       });
     });
   }
@@ -1136,8 +1142,8 @@ const Piped=(function(){
       best=await call("/streams/"+encodeURIComponent(t._ytId),signal,function(j){ const b=pickAudio(j); if(!b) return null; if(/googlevideo\.com/i.test(b.url)){ if(!fallback) fallback={b:b,d:j.duration}; return null; } return {b:b,d:j.duration}; });
     }catch(e){ if(e&&e.type==="aborted") throw e; }
     const pick=best||fallback;
-    if(!pick){ const iv=await invStream(t._ytId,signal); t.downloadUrl={"160":iv.url}; t._pipedAt=Date.now(); t._yt=false; if(!t.duration&&iv.d) t.duration=iv.d; return t; }
-    t.downloadUrl={"160":pick.b.url}; t._pipedAt=Date.now(); t._yt=false;
+    if(!pick){ const iv=await invStream(t._ytId,signal); t.downloadUrl={"160":iv.url}; t._pipedAt=Date.now(); if(!t.duration&&iv.d) t.duration=iv.d; return t; }
+    t.downloadUrl={"160":pick.b.url}; t._pipedAt=Date.now();
     if(!t.duration&&pick.d) t.duration=Number(pick.d)||0;
     return t;
   }
@@ -1803,7 +1809,7 @@ const Player={
     if(!isAuto){State.smartRadioRefillToken++;finalizeCrossfadeIfRunning();this._nextInFlight=false;}else if(!State.settings.autoplayNext||State.repeat==="one")return false;
     const myToken=++this._playToken;
     if(contextList){Queue.setQueue(SmartRadio.prepareInitialQueue(track,contextList),0);State.smartRadioActive=false;}else if(isAuto)State.smartRadioActive=true;
-    if(track._piped&&Piped.needsResolve(track)){try{await Piped.resolve(track);}catch(e){}if(myToken!==this._playToken)return false;}
+    if(track._piped&&Piped.needsResolve(track)){try{await Promise.race([Piped.resolve(track),new Promise(function(_,rj){setTimeout(function(){rj(new Error("timeout"));},12000);})]);}catch(e){if(!(e&&e.type==="aborted")){track._yt=true;try{toast("Ad-free stream not available right now, using the YouTube player.");}catch(_){}}}if(myToken!==this._playToken)return false;}
     if(!track._yt&&!bestAudioUrl(track)){if(!isAuto)toast("This track has no playable audio source.","error");return false;}
     const cur=primaryAudio(),hasActive=!!(cur&&cur.src&&State.currentTrack),same=!!(State.currentTrack&&State.currentTrack.id===track.id);
     const outgoingTrackId = hasActive && !same && State.currentTrack ? State.currentTrack.id : null;
@@ -3841,6 +3847,18 @@ function init(){
       }catch(err){ lastErr=err; try{el.removeAttribute("src");el.load();}catch(_){} }
     }
     throw lastErr || new Error("no-src");
+  };
+  const _lapDirect = loadAndPlay;
+  loadAndPlay = async function(el, track, startAt){
+    try{ return await _lapDirect.apply(this, arguments); }
+    catch(err){
+      if(track && track._piped && !track._yt && !(err && (err.name==="NotAllowedError"||err.name==="AbortError"))){
+        track._yt = true;
+        try{ toast("Ad-free stream failed, using the YouTube player for this song."); }catch(_){}
+        return originalLoadAndPlay.call(this, el, track, startAt);
+      }
+      throw err;
+    }
   };
 
   // Adaptive crossfade: never let the blend consume most of a short incoming track.
