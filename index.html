@@ -2881,21 +2881,34 @@ function ytTitle(n){return String(n||"Untitled").replace(/\s*[\(\[](official|lyr
 async function ytSearch(q,sig){
   const d=await ytPiped("/search?q="+encodeURIComponent(q)+"&filter=music_songs",sig);
   return (d.items||[]).filter(x=>x.url&&ytVid(x.url)).map(x=>({id:"yt_"+ytVid(x.url),_yt:ytVid(x.url),name:ytTitle(x.title),
-    duration:Number(x.duration)||0,year:"",language:"",image:(x.thumbnail||FALLBACK_ART).replace(/^http:/,"https:"),
+    duration:Number(x.duration)||0,year:"",language:"",image:"https://i.ytimg.com/vi/"+ytVid(x.url)+"/mqdefault.jpg",
     artistName:ytClean(x.uploaderName),artistId:null,albumName:"",albumId:null,downloadUrl:{},hasLyrics:false}));
 }
 function ytStale(track){return !!(track&&track._yt&&(!bestAudioUrl(track)||Date.now()-(track._ytAt||0)>10800000));}
+const YT_INV=["https://inv.nadeko.net","https://yewtu.be","https://invidious.nerdvpn.de","https://invidious.privacyredirect.com"];
+let ytErr="";
+function ytPickAudio(a,getType,getRate){a=a.filter(s=>s.url);const m=a.filter(s=>/mp4|m4a/i.test(getType(s)));
+  return (m.length?m:a).slice().sort((x,y)=>getRate(y)-getRate(x))[0]||null;}
+function ytProxyFix(u,proxy){try{const x=new URL(u);if(proxy&&/googlevideo\.com$/i.test(x.hostname)){x.searchParams.set("host",x.host);x.host=new URL(proxy).host;}return x.toString().replace(/^http:/,"https:");}catch(e){return u;}}
 async function ytResolve(track){
   if(!track||!track._yt)return true; if(!ytStale(track))return true;
+  let url=null;ytErr="";
   try{const d=await ytPiped("/streams/"+track._yt);
-    const a=(d.audioStreams||[]).filter(s=>s.url),m=a.filter(s=>/mp4|m4a/i.test((s.mimeType||"")+(s.format||"")));
-    const b=(m.length?m:a).slice().sort((x,y)=>(y.bitrate||0)-(x.bitrate||0))[0];
-    if(!b)return false;
-    const u=b.url.replace(/^http:/,"https:");track.downloadUrl={"320":u,"160":u,"96":u,"48":u,"12":u};track._ytAt=Date.now();return true;
-  }catch(e){return false;}
+    if(d&&d.error)ytErr=String(d.message||d.error).slice(0,60);
+    const b=ytPickAudio(d.audioStreams||[],s=>(s.mimeType||"")+(s.format||""),s=>s.bitrate||0);
+    if(b)url=ytProxyFix(b.url,d.proxyUrl);
+  }catch(e){ytErr=(e&&e.message)||"piped failed";}
+  for(let i=0;i<YT_INV.length&&!url;i++){
+    try{const d=await ytFetch(YT_INV[i]+"/api/v1/videos/"+track._yt+"?local=true&fields=adaptiveFormats",8000);
+      const b=ytPickAudio((d.adaptiveFormats||[]).filter(f=>/^audio/.test(f.type||"")),f=>f.type||"",f=>parseInt(f.bitrate)||0);
+      if(b)url=b.url.replace(/^http:/,"https:");
+    }catch(e){}
+  }
+  if(!url)return false;
+  track.downloadUrl={"320":url,"160":url,"96":url,"48":url,"12":url};track._ytAt=Date.now();return true;
 }
 async function resolvePlayableTrack(track){
-  if(ytStale(track)){ toast("Loading YouTube audio…"); if(!(await ytResolve(track))){toast("Couldn't load YouTube audio. Try again.","error");return null;} return track; }
+  if(ytStale(track)){ toast("Loading YouTube audio…"); if(!(await ytResolve(track))){toast("Couldn't load YouTube audio"+(ytErr?" ("+ytErr+")":"")+". Try again.","error");return null;} return track; }
   if(track && track._needsFetch && !Object.keys(track.downloadUrl||{}).length){
     try{ const r = await Api.getSong(track.id); const full = normalizeSong(Array.isArray(r.data)?r.data[0]:r.data); return full; }
     catch(e){ toast("Couldn't load this track's audio.", "error"); return null; }
